@@ -1,0 +1,15 @@
+name: fungalflye
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.10
+  - flye
+  - minimap2
+  - racon
+  - seqkit
+  - filtlong
+  - pandas
+  - matplotlib
+  - biopython
+  - typer
