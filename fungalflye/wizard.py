@@ -11,8 +11,14 @@ app = typer.Typer()
 BANNER = r"""
 🧬🐉  FungalFlye  🐉🧬
 Long-read fungal genome assembly pipeline
+
+Interactive genome assembly for fungi
 """
 
+
+# ------------------------------------------------
+# helpers
+# ------------------------------------------------
 
 def pause(msg="Press Enter to continue..."):
     typer.echo("")
@@ -37,6 +43,10 @@ def normalize_gsize(g: str) -> str:
     return g
 
 
+# ------------------------------------------------
+# telomere setup
+# ------------------------------------------------
+
 def get_telomere_setup():
 
     run_telomeres = typer.confirm("Run telomere analysis?", default=True)
@@ -44,139 +54,237 @@ def get_telomere_setup():
     if not run_telomeres:
         return False, None, False
 
-    typer.echo("\nDo you know the telomere motif?")
-    typer.echo("  1) Yes")
+    typer.echo("\nTelomere motif:")
+    typer.echo("  1) I know the motif")
     typer.echo("  2) Auto discover")
 
     choice = typer.prompt("Enter 1 or 2", default="2")
 
     if choice.strip() == "1":
-        motif = typer.prompt(
-            "Enter telomere motif sequence"
-        ).strip().upper()
+        motif = typer.prompt("Enter motif sequence").strip().upper()
         return True, motif, False
 
     return True, None, True
 
+
+# ------------------------------------------------
+# resume detection
+# ------------------------------------------------
+
+def detect_existing_run(outdir):
+
+    outdir = Path(outdir)
+
+    final = outdir / "final.fasta"
+
+    if final.exists():
+        return "complete"
+
+    flye = outdir / "flye" / "assembly.fasta"
+    racon = outdir / "racon.fasta"
+
+    if racon.exists():
+        return "racon"
+
+    if flye.exists():
+        return "flye"
+
+    return None
+
+
+# ------------------------------------------------
+# MAIN WIZARD
+# ------------------------------------------------
 
 @app.command()
 def wizard():
 
     typer.echo(BANNER)
 
-    # -------------------------
-    # INPUT LOOP (editable)
-    # -------------------------
-
     while True:
 
-        reads = typer.prompt(
-            "Path to raw reads",
-            value_proc=path_exists
-        )
+        typer.echo("\nSelect mode:")
+        typer.echo("  1) Full pipeline")
+        typer.echo("  2) Assembly only")
+        typer.echo("  3) QC only")
+        typer.echo("  4) Exit")
 
-        gsize = typer.prompt("Genome size (e.g., 40m)", default="40m")
-        gsize = normalize_gsize(gsize)
+        mode = typer.prompt("Enter choice", default="1")
 
-        outdir = typer.prompt("Output folder", default="fungalflye_out")
-        threads = typer.prompt("Threads", default=8, type=int)
-
-        typer.echo("\n🧾 Plan:")
-        typer.echo(f"Reads: {reads}")
-        typer.echo(f"Genome size: {gsize}")
-        typer.echo(f"Outdir: {outdir}")
-        typer.echo(f"Threads: {threads}")
-
-        typer.echo("\nProceed?")
-        typer.echo("  1) Yes")
-        typer.echo("  2) Edit parameters")
-        typer.echo("  3) Cancel")
-
-        choice = typer.prompt("Enter 1/2/3", default="1")
-
-        if choice == "1":
-            break
-        elif choice == "3":
+        if mode == "4":
             raise typer.Exit()
 
-    Path(outdir).mkdir(exist_ok=True)
+        # -------------------------
+        # QC ONLY
+        # -------------------------
 
-    # -------------------------
-    # READ ANALYSIS
-    # -------------------------
+        if mode == "3":
 
-    typer.echo("\n🔎 Analyzing read lengths...\n")
+            fasta = typer.prompt(
+                "Path to assembly FASTA",
+                value_proc=path_exists
+            )
 
-    total_reads, total_bases, read_n50, lengths = analyze_reads(reads, outdir)
+            run_telomeres, tel_motif, auto_tel = get_telomere_setup()
 
-    typer.echo(f"Total reads: {total_reads:,}")
-    typer.echo(f"Total bases: {total_bases:,}")
-    typer.echo(f"Read N50: {read_n50:,} bp")
+            if run_telomeres and auto_tel:
+                tel_motif = discover_telomere_motif(fasta)
 
-    suggested_cutoff = int(read_n50 * 0.7)
+            run_qc(
+                fasta,
+                telomere=tel_motif,
+                run_telomeres=run_telomeres
+            )
 
-    typer.echo(f"\nSuggested minimum read length: {suggested_cutoff} bp")
+            raise typer.Exit()
 
-    # -------------------------
-    # FILTER OPTION
-    # -------------------------
+        # -------------------------
+        # ASSEMBLY INPUT LOOP
+        # -------------------------
 
-    apply_filter = typer.confirm("Apply read filtering?", default=True)
+        while True:
 
-    min_read_len = 0
+            reads = typer.prompt(
+                "Path to raw reads",
+                value_proc=path_exists
+            )
 
-    if apply_filter:
+            gsize = typer.prompt("Genome size (e.g., 40m)", default="40m")
+            gsize = normalize_gsize(gsize)
 
-        cutoff = typer.prompt(
-            "Minimum read length",
-            default=suggested_cutoff
+            outdir = typer.prompt("Output folder", default="fungalflye_out")
+            threads = typer.prompt("Threads", default=8, type=int)
+
+            typer.echo("\nPlan:")
+            typer.echo(f"Reads: {reads}")
+            typer.echo(f"Genome size: {gsize}")
+            typer.echo(f"Outdir: {outdir}")
+            typer.echo(f"Threads: {threads}")
+
+            typer.echo("\nProceed?")
+            typer.echo("  1) Yes")
+            typer.echo("  2) Edit")
+            typer.echo("  3) Cancel")
+
+            choice = typer.prompt("Enter choice", default="1")
+
+            if choice == "1":
+                break
+            elif choice == "3":
+                raise typer.Exit()
+
+        Path(outdir).mkdir(exist_ok=True)
+
+        # ------------------------------------------------
+        # RESUME DETECTION
+        # ------------------------------------------------
+
+        existing = detect_existing_run(outdir)
+
+        if existing:
+            typer.echo(f"\n⚠ Existing run detected: {existing}")
+
+            resume = typer.confirm("Resume previous run?", default=True)
+
+            if resume and existing == "complete":
+                typer.echo("Assembly already complete.")
+                final_fasta = Path(outdir) / "final.fasta"
+            else:
+                final_fasta = None
+        else:
+            final_fasta = None
+
+        # ------------------------------------------------
+        # READ ANALYSIS
+        # ------------------------------------------------
+
+        typer.echo("\n🔎 Analyzing reads...\n")
+
+        total_reads, total_bases, read_n50, lengths = analyze_reads(reads, outdir)
+
+        typer.echo(f"Total reads: {total_reads:,}")
+        typer.echo(f"Total bases: {total_bases:,}")
+        typer.echo(f"Read N50: {read_n50:,} bp")
+
+        suggested_cutoff = int(read_n50 * 0.7)
+
+        typer.echo(f"Suggested cutoff: {suggested_cutoff} bp")
+
+        # ------------------------------------------------
+        # FILTER
+        # ------------------------------------------------
+
+        min_read_len = 0
+
+        if typer.confirm("Apply read filtering?", default=True):
+
+            cutoff = typer.prompt(
+                "Minimum read length",
+                default=suggested_cutoff
+            )
+
+            kept, removed = preview_filter(lengths, cutoff)
+
+            typer.echo(f"Reads kept: {kept:,}")
+            typer.echo(f"Reads removed: {removed:,}")
+
+            if typer.confirm("Continue?", default=True):
+                min_read_len = cutoff
+
+        # ------------------------------------------------
+        # DOWNSAMPLE
+        # ------------------------------------------------
+
+        downsample_cov = typer.prompt(
+            "Downsample coverage? (0 = none)",
+            default=0,
+            type=int
         )
 
-        kept, removed = preview_filter(lengths, cutoff)
+        # ------------------------------------------------
+        # TELEMERES
+        # ------------------------------------------------
 
-        typer.echo(f"\nReads kept: {kept:,}")
-        typer.echo(f"Reads removed: {removed:,}")
+        run_telomeres, tel_motif, auto_tel = get_telomere_setup()
 
-        confirm = typer.confirm("Continue?", default=True)
+        pause("Ready. Press Enter to start assembly")
 
-        if confirm:
-            min_read_len = cutoff
+        # ------------------------------------------------
+        # RUN ASSEMBLY
+        # ------------------------------------------------
 
-    # -------------------------
-    # DOWNSAMPLE
-    # -------------------------
+        if final_fasta is None:
 
-    downsample_cov = typer.prompt(
-        "Downsample coverage? (0 = none)",
-        default=0,
-        type=int
-    )
+            final_fasta = run_assembly(
+                reads=reads,
+                genome_size=gsize,
+                outdir=outdir,
+                threads=threads,
+                min_read_len=min_read_len,
+                downsample_cov=downsample_cov,
+            )
 
-    run_telomeres, tel_motif, auto_tel = get_telomere_setup()
+        # ------------------------------------------------
+        # QC
+        # ------------------------------------------------
 
-    pause("Ready. Press Enter to start assembly")
+        if mode == "1":
 
-    final_fasta = run_assembly(
-        reads=reads,
-        genome_size=gsize,
-        outdir=outdir,
-        threads=threads,
-        min_read_len=min_read_len,
-        downsample_cov=downsample_cov,
-    )
+            pause("Assembly finished. Press Enter to run QC")
 
-    pause("Assembly finished. Press Enter to run QC")
+            if run_telomeres and auto_tel:
+                tel_motif = discover_telomere_motif(final_fasta)
 
-    if run_telomeres and auto_tel:
-        tel_motif = discover_telomere_motif(final_fasta)
+            run_qc(
+                final_fasta,
+                telomere=tel_motif,
+                run_telomeres=run_telomeres
+            )
 
-    run_qc(
-        final_fasta,
-        telomere=tel_motif,
-        run_telomeres=run_telomeres
-    )
+        typer.echo("\n🎉 Pipeline complete.")
+        typer.echo(f"Final assembly: {final_fasta}\n")
 
-    typer.echo("\n✅ All done.")
+        raise typer.Exit()
 
 
 if __name__ == "__main__":
