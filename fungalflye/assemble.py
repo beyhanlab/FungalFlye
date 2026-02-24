@@ -1,288 +1,145 @@
-# assemble.py
-
 import subprocess
 from pathlib import Path
 import shutil
-import sys
+import shutil as sh
 
-# -------------------------
-
-# helper runner
-
-# -------------------------
 
 def run(cmd):
-print(f"\n[fungalflye] Running: {cmd}\n")
-subprocess.run(cmd, shell=True, check=True)
+    print(f"\n[fungalflye] Running: {cmd}\n")
+    subprocess.run(cmd, shell=True, check=True)
 
-# -------------------------
-
-# dependency check
-
-# -------------------------
 
 def check_dependencies():
 
-```
-tools = ["flye", "minimap2", "racon", "seqkit"]
+    tools = ["flye", "minimap2", "racon", "seqkit"]
 
-missing = []
+    missing = []
 
-for t in tools:
-    if shutil.which(t) is None:
-        missing.append(t)
+    for t in tools:
+        if sh.which(t) is None:
+            missing.append(t)
 
-if missing:
-    print("\n❌ Missing required tools:")
-    for m in missing:
-        print(f"  - {m}")
+    if missing:
+        print("\n❌ Missing required tools:")
+        for m in missing:
+            print(f"  - {m}")
 
-    print("\nInstall with:")
-    print("  conda env create -f environment.yml")
-    print("  conda activate fungalflye\n")
+        print("\nInstall with:")
+        print("conda install -c bioconda flye minimap2 racon seqkit filtlong\n")
 
-    sys.exit(1)
-```
+        raise SystemExit(1)
 
-# -------------------------
-
-# containment pruning
-
-# -------------------------
 
 def prune_contained_contigs(fasta, out_fasta, threads=8):
 
-```
-print("\n[fungalflye] Pruning redundant contigs (>95% contained)\n")
+    print("\n[fungalflye] Pruning redundant contigs (>95% contained)\n")
 
-fasta = Path(fasta)
-out_fasta = Path(out_fasta)
+    fasta = Path(fasta)
+    out_fasta = Path(out_fasta)
 
-paf = out_fasta.with_suffix(".self.paf")
+    paf = out_fasta.with_suffix(".self.paf")
 
-run(
-    f"minimap2 -x asm10 -t {threads} {fasta} {fasta} > {paf}"
-)
+    run(f"minimap2 -x asm10 -t {threads} {fasta} {fasta} > {paf}")
 
-remove = set()
-lengths = {}
+    remove = set()
 
-# collect lengths
-with open(fasta) as f:
-    name = None
-    seq = []
-    for line in f:
-        if line.startswith(">"):
-            if name:
-                lengths[name] = len("".join(seq))
-            name = line[1:].split()[0]
-            seq = []
-        else:
-            seq.append(line.strip())
-    if name:
-        lengths[name] = len("".join(seq))
-
-# parse alignments
-with open(paf) as f:
-    for line in f:
-
-        cols = line.strip().split()
-
-        q = cols[0]
-        t = cols[5]
-
-        if q == t:
-            continue
-
-        qlen = int(cols[1])
-        tlen = int(cols[6])
-
-        matches = int(cols[9])
-        aln_len = int(cols[10])
-
-        identity = matches / aln_len if aln_len > 0 else 0
-        coverage = aln_len / qlen if qlen > 0 else 0
-
-        if identity > 0.95 and coverage > 0.95:
-
-            if qlen < tlen:
-                remove.add(q)
-
-# write filtered fasta
-with open(out_fasta, "w") as out:
-
-    keep = True
-
-    with open(fasta) as f:
+    with open(paf) as f:
         for line in f:
 
-            if line.startswith(">"):
-                name = line[1:].split()[0]
-                keep = name not in remove
+            cols = line.strip().split()
 
-            if keep:
-                out.write(line)
+            q = cols[0]
+            t = cols[5]
 
-print(f"[fungalflye] Removed {len(remove)} redundant contigs")
+            if q == t:
+                continue
 
-paf.unlink(missing_ok=True)
-```
+            qlen = int(cols[1])
+            tlen = int(cols[6])
 
-# -------------------------
+            matches = int(cols[9])
+            aln_len = int(cols[10])
 
-# main assembly pipeline
+            identity = matches / aln_len if aln_len > 0 else 0
+            coverage = aln_len / qlen if qlen > 0 else 0
 
-# -------------------------
+            if identity > 0.95 and coverage > 0.95:
+                if qlen < tlen:
+                    remove.add(q)
+
+    with open(out_fasta, "w") as out:
+        keep = True
+        with open(fasta) as f:
+            for line in f:
+                if line.startswith(">"):
+                    name = line[1:].split()[0]
+                    keep = name not in remove
+                if keep:
+                    out.write(line)
+
+    paf.unlink(missing_ok=True)
+
+    print(f"[fungalflye] Removed {len(remove)} redundant contigs")
+
 
 def run_assembly(
-reads,
-genome_size,
-outdir,
-threads=8,
-min_read_len=3000,
-downsample_cov=0,
+    reads,
+    genome_size,
+    outdir,
+    threads=8,
+    min_read_len=0,
+    downsample_cov=0,
 ):
 
-```
-check_dependencies()
+    check_dependencies()
 
-outdir = Path(outdir)
-outdir.mkdir(exist_ok=True)
+    outdir = Path(outdir)
+    outdir.mkdir(exist_ok=True)
 
-reads = Path(reads)
+    reads = Path(reads)
 
-flye_dir = outdir / "flye"
+    flye_dir = outdir / "flye"
+    filtered_reads = outdir / "reads.filtered.fastq"
+    paf = outdir / "reads.paf"
 
-filtered_reads = outdir / "reads.filtered.fastq"
-downsampled_reads = outdir / "reads.downsampled.fastq"
+    racon_fasta = outdir / "racon.fasta"
+    pruned_fasta = outdir / "pruned.fasta"
+    final_fasta = outdir / "final.fasta"
 
-paf = outdir / "reads.paf"
+    reads_used = reads
 
-racon_fasta = outdir / "racon.fasta"
-pruned_fasta = outdir / "pruned.fasta"
-final_fasta = outdir / "final.fasta"
-
-# -------------------------
-# resume detection
-# -------------------------
-
-if final_fasta.exists():
-    print("\n[fungalflye] Existing final assembly detected.")
-    print(f"Path: {final_fasta}")
-    print("Skipping assembly (resume mode)\n")
-    return str(final_fasta)
-
-# -------------------------
-# read filtering
-# -------------------------
-
-print("\n[fungalflye] Preparing reads\n")
-
-reads_used = reads
-
-if min_read_len > 0:
-
-    if str(reads) != str(filtered_reads):
-
-        run(
-            f"seqkit seq -m {min_read_len} {reads} > {filtered_reads}"
-        )
-
+    # filtering
+    if min_read_len > 0:
+        run(f"seqkit seq -m {min_read_len} {reads} > {filtered_reads}")
         reads_used = filtered_reads
 
-# -------------------------
-# optional downsampling
-# -------------------------
-
-if downsample_cov > 0:
-
-    print("\n[fungalflye] Downsampling reads\n")
-
-    g = str(genome_size).lower()
-
-    if "m" in g:
-        genome_bp = int(g.replace("m", "")) * 1_000_000
-    else:
-        genome_bp = int(g)
-
-    target_bases = genome_bp * downsample_cov
-
+    # Flye
     run(
-        f"filtlong --target_bases {target_bases} "
-        f"{reads_used} > {downsampled_reads}"
+        f"flye --nano-hq {reads_used} "
+        f"--genome-size {genome_size} "
+        f"--threads {threads} "
+        f"--iterations 3 "
+        f"--asm-coverage 60 "
+        f"--keep-haplotypes "
+        f"-o {flye_dir}"
     )
 
-    reads_used = downsampled_reads
+    assembly = flye_dir / "assembly.fasta"
 
-if not reads_used.exists() or reads_used.stat().st_size == 0:
-    raise RuntimeError(
-        "Reads file is empty after filtering/downsampling."
+    # mapping
+    run(
+        f"minimap2 -x map-ont -t {threads} "
+        f"{assembly} {reads_used} > {paf}"
     )
 
-# -------------------------
-# Flye assembly
-# -------------------------
+    # racon
+    run(f"racon {reads_used} {paf} {assembly} > {racon_fasta}")
 
-print("\n[fungalflye] Running Flye assembly\n")
+    prune_contained_contigs(racon_fasta, pruned_fasta, threads)
 
-run(
-    f"flye --nano-hq {reads_used} "
-    f"--genome-size {genome_size} "
-    f"--threads {threads} "
-    f"--iterations 3 "
-    f"--asm-coverage 60 "
-    f"--keep-haplotypes "
-    f"-o {flye_dir}"
-)
+    shutil.copy(pruned_fasta, final_fasta)
 
-assembly = flye_dir / "assembly.fasta"
+    print("\n🧬 Assembly Complete")
+    print(f"Final assembly: {final_fasta}\n")
 
-if not assembly.exists():
-    raise RuntimeError("Flye assembly not produced.")
-
-# -------------------------
-# mapping reads
-# -------------------------
-
-print("\n[fungalflye] Mapping reads\n")
-
-run(
-    f"minimap2 -x map-ont -t {threads} "
-    f"{assembly} {reads_used} > {paf}"
-)
-
-# -------------------------
-# racon polishing
-# -------------------------
-
-print("\n[fungalflye] Running Racon polishing\n")
-
-run(
-    f"racon {reads_used} {paf} {assembly} > {racon_fasta}"
-)
-
-# -------------------------
-# prune redundant contigs
-# -------------------------
-
-prune_contained_contigs(
-    racon_fasta,
-    pruned_fasta,
-    threads=threads
-)
-
-shutil.copy(pruned_fasta, final_fasta)
-
-n_contigs = sum(
-    1 for line in open(final_fasta) if line.startswith(">")
-)
-
-print("\n" + "=" * 50)
-print("🧬 Assembly Complete")
-print("=" * 50)
-print(f"Final assembly: {final_fasta}")
-print(f"Contigs: {n_contigs}")
-print("=" * 50 + "\n")
-
-return str(final_fasta)
-```
+    return str(final_fasta)

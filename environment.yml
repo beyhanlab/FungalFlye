@@ -13,3 +13,6 @@ dependencies:
   - matplotlib
   - biopython
   - typer
+  - pip
+  - pip:
+      - git+https://github.com/beyhanlab/FungalFlye.git
