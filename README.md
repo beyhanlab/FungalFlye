@@ -7,11 +7,7 @@ Long-read fungal genome assembly pipeline using Flye.
 
 This installs all dependencies + FungalFlye in one environment.
 
-conda env create -f environment.yml
-conda activate fungalflye
-
-pip install git+https://github.com/beyhanlab/FungalFlye.git
-
+conda create -n fungalflye python=3.10 -y conda activate fungalflye pip install git+https://github.com/beyhanlab/FungalFlye.git conda install -c bioconda flye minimap2 racon seqkit filtlong -y
 
 ▶️ Run FungalFlye
 
