@@ -6,7 +6,8 @@ import typer
 from .assemble import run_assembly
 from .qc import run_qc, discover_telomere_motif
 from .cli import analyze_reads, preview_filter
-from .compare import run_snp_analysis, run_dotplot
+from .compare import run_snp_analysis
+from .dotplot_run import run_dotplot
 
 app = typer.Typer()
 
