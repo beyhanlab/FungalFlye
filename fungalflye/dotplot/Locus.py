@@ -3,7 +3,7 @@
 HistoBase is built on.
 """
 
-from MsvUtil import prototypeable
+from .MsvUtil import prototypeable
 
 @prototypeable
 class Locus:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from Collisions import RefCollisions, SortLoci
-from Gff3 import Gff3file
+from .Collisions import RefCollisions, SortLoci
+from .Gff3 import Gff3file
 from .Locus import Locus, spanningLocus
 from .Sequence import DnaSequence, ProteinSequence
 

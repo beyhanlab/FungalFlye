@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from .Genome import Genome, Contig, MemGeneSet
-from FastaFile import FastaFile
+from .FastaFile import FastaFile
 from .Sequence import DnaSequence
 
 class FastaGenome(Genome):

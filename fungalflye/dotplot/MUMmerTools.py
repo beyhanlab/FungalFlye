@@ -2,7 +2,7 @@
 
 from .Locus import Locus
 from .GenomeCoord import GenomeCoord
-from PCA import pca_plot
+from .PCA import pca_plot
 
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
@@ -99,7 +99,7 @@ class NucmerMap:
 
 # Telomere related calculations and plots
 
-from MsvUtil import median, hdict, argmax
+from .MsvUtil import median, hdict, argmax
 def nucmer_stats(comp):
     sums = {}
     for (i,c) in comp.genomeA.Contigs():
