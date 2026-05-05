@@ -15,6 +15,15 @@ import math
 from pathlib import Path
 from Bio import SeqIO
 
+# Optional PacBio detection import
+try:
+    from .pacbio_detection import detect_pacbio_data_type
+    PACBIO_DETECTION_AVAILABLE = True
+except ImportError:
+    PACBIO_DETECTION_AVAILABLE = False
+    def detect_pacbio_data_type(*args, **kwargs):
+        return None, 0, {"error": "PacBio detection module not available"}
+
 
 # ------------------------------------------------
 # helpers
@@ -34,59 +43,7 @@ def run_capture(cmd):
 # MODULE 1 — Adaptive Flye parameter selection
 # ================================================
 
-def suggest_flye_params(reads, genome_size_bp, threads=8, read_type=None):
-    """
-    Analyse reads and return optimised Flye parameters as a dict.
-    Prints a human-readable explanation of every decision made.
-    
-    read_type: "pacbio-hifi", "nano-hq", "nano-raw" - overrides detection
-    """
 
-    print("\n" + "=" * 60)
-    print("🔬 Module 1 — Adaptive parameter selection")
-    print("=" * 60)
-
-    # --- read stats via seqkit ---
-    print("\n[funcat] Analysing read characteristics...")
-
-    stats_raw = run_capture(
-        f"seqkit fx2tab -n -l -g {reads} 2>/dev/null"
-    )
-
-    lengths = []
-    gcs = []
-
-    for line in stats_raw.splitlines():
-        parts = line.strip().split("\t")
-        if len(parts) >= 3:
-            try:
-                lengths.append(int(parts[1]))
-                gcs.append(float(parts[2]))
-            except ValueError:
-                pass
-
-    if not lengths:
-        print("[funcat] ⚠️  Could not parse read stats — using defaults")
-        return {}
-
-    total_bases = sum(lengths)
-    coverage = total_bases / genome_size_bp
-    mean_gc = sum(gcs) / len(gcs) if gcs else 50.0
-
-    sorted_len = sorted(lengths, reverse=True)
-    cumsum, read_n50 = 0, 0
-    for L in sorted_len:
-        cumsum += L
-        if cumsum >= total_bases / 2:
-            read_n50 = L
-            break
-
-    print(f"\n  Read N50       : {read_n50:,} bp")
-    print(f"  Est. coverage  : {coverage:.1f}x")
-    print(f"  Mean GC        : {mean_gc:.1f}%")
-
-    params = {}
-    reasoning = []
 
 def suggest_flye_params(reads, genome_size_bp, threads=8, read_type=None):
     """
@@ -138,6 +95,32 @@ def suggest_flye_params(reads, genome_size_bp, threads=8, read_type=None):
     print(f"\n  Read N50       : {read_n50:,} bp")
     print(f"  Est. coverage  : {coverage:.1f}x")
     print(f"  Mean GC        : {mean_gc:.1f}%")
+
+    # --- Auto-detect PacBio data type if needed ---
+    if read_type and 'pacbio' in read_type.lower():
+        print("\n[funcat] 📡 PacBio data detected - analyzing data type...")
+        
+        detected_type, confidence, details = detect_pacbio_data_type(reads)
+        
+        if detected_type and confidence > 0.8:
+            print(f"[funcat] ✅ Auto-detected: {detected_type} (confidence: {confidence*100:.0f}%)")
+            
+            if read_type == "pacbio-hifi" and detected_type == "pacbio-raw":
+                print(f"[funcat] ⚠️  WARNING: You specified HiFi but data appears to be raw subreads!")
+                print(f"[funcat] This may cause 'No overlaps found' errors.")
+                print(f"[funcat] Recommendation: Use --pacbio-raw instead")
+                
+                # Auto-correct if high confidence
+                if confidence > 0.9:
+                    print(f"[funcat] 🔧 Auto-correcting read type to: {detected_type}")
+                    read_type = detected_type
+                    
+            elif read_type == "pacbio-raw" and detected_type == "pacbio-hifi":
+                print(f"[funcat] ℹ️  Note: Data appears to be HiFi but using raw mode as requested")
+        
+        else:
+            print(f"[funcat] ❓ Could not auto-detect PacBio type reliably")
+            print(f"[funcat] Proceeding with specified type: {read_type}")
 
     params = {}
     reasoning = []
@@ -312,12 +295,18 @@ def run_medaka_iterative(
         last_variants = state.get("last_variants", None)
         current = Path(state.get("current_fasta", assembly))
         print(f"[funcat] Resuming from round {last_round}")
+        
+        # If we've already completed max_rounds, use the existing result
+        if last_round >= max_rounds:
+            final_fasta = current
+            print(f"[funcat] Polishing already complete at round {last_round}")
+        else:
+            final_fasta = None
     else:
         state = {}
         last_round = 0
         last_variants = None
-
-    final_fasta = None
+        final_fasta = None
 
     for round_num in range(last_round + 1, max_rounds + 1):
 
@@ -414,7 +403,7 @@ def run_purge_dups(assembly, reads, outdir, threads, minimap2_preset):
     print("=" * 60)
 
     purge_dir = Path(outdir) / "purge_dups"
-    purge_dir.mkdir(exist_ok=True)
+    purge_dir.mkdir(parents=True, exist_ok=True)
 
     purged_primary = purge_dir / "purged.fa"
     haplotigs = purge_dir / "hap.fa"
@@ -445,11 +434,106 @@ def run_purge_dups(assembly, reads, outdir, threads, minimap2_preset):
     print("[funcat] Step 3 — coverage histogram")
     stat_file = purge_dir / "PB.stat"
     base_cov = purge_dir / "PB.base.cov"
-    run(f"pbcstat {read_paf} -O {purge_dir}/")
+    
+    try:
+        # Ensure output directory exists and is writable
+        purge_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Try alternative pbcstat approach - change directory first
+        print("[funcat] Using working directory approach for pbcstat...")
+        result = subprocess.run(
+            f"cd {purge_dir} && pbcstat {read_paf}",
+            shell=True, 
+            capture_output=True, 
+            text=True
+        )
+        
+        if result.returncode != 0:
+            print(f"pbcstat stderr: {result.stderr}")
+            raise RuntimeError(f"pbcstat failed with exit code {result.returncode}")
 
-    print("[funcat] Step 4 — calculating cutoffs")
-    cutoffs_file = purge_dir / "cutoffs"
-    run(f"calcuts {stat_file} > {cutoffs_file}")
+
+        
+        # Validate PB.stat file before proceeding
+        if not stat_file.exists():
+            raise FileNotFoundError(f"pbcstat failed to create {stat_file}")
+        
+        if stat_file.stat().st_size == 0:
+            raise ValueError(f"pbcstat created empty file: {stat_file}")
+        
+        print("[funcat] Step 4 — calculating cutoffs")
+        cutoffs_file = purge_dir / "cutoffs"
+        
+        # Safe calcuts execution
+        result = subprocess.run(f"calcuts {stat_file}", shell=True, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            raise RuntimeError(f"calcuts failed with exit code {result.returncode}: {result.stderr}")
+        
+        # Write cutoffs output
+        with open(cutoffs_file, 'w') as f:
+            f.write(result.stdout)
+            
+        # Validate cutoffs - if all contigs marked as junk, adjust parameters
+        print("[funcat] Validating purge duplicates parameters...")
+        
+        # First run a test to see what gets classified
+        test_bed = purge_dir / "test_dups.bed"
+        test_result = subprocess.run(
+            f"purge_dups -2 -T {cutoffs_file} -c {base_cov} {self_paf}",
+            shell=True, 
+            capture_output=True, 
+            text=True,
+            cwd=purge_dir
+        )
+        
+        if test_result.returncode == 0:
+            with open(test_bed, 'w') as f:
+                f.write(test_result.stdout)
+                
+            # Check if all sequences marked as JUNK
+            junk_count = 0
+            keep_count = 0
+            
+            with open(test_bed, 'r') as f:
+                for line in f:
+                    if line.strip():
+                        if '\tJUNK' in line:
+                            junk_count += 1
+                        elif '\tKEEP' in line or '\tHAP' in line:
+                            keep_count += 1
+            
+            # If all sequences marked as JUNK, use less aggressive parameters
+            if junk_count > 0 and keep_count == 0:
+                print(f"⚠️  All {junk_count} contigs marked as JUNK - adjusting parameters for ONT diploid data")
+                
+                # Create more permissive cutoffs for ONT diploid assembly
+                permissive_cutoffs = "3\t8\t15\t40\t80\t160"  # More conservative
+                with open(cutoffs_file, 'w') as f:
+                    f.write(permissive_cutoffs)
+                    
+                print("[funcat] Using relaxed cutoffs optimized for ONT diploid assembly")
+            elif junk_count > keep_count * 3:  # More than 75% marked as junk
+                print(f"⚠️  Too many contigs marked as JUNK ({junk_count} vs {keep_count} primary)")
+                print("[funcat] Adjusting for better primary/haplotig balance")
+                
+                # Moderately permissive for cases with excessive junk classification
+                balanced_cutoffs = "5\t10\t20\t50\t100\t200"
+                with open(cutoffs_file, 'w') as f:
+                    f.write(balanced_cutoffs)
+                    
+                print("[funcat] Using balanced cutoffs for optimal haplotig detection")
+            else:
+                print(f"[funcat] Acceptable purge parameters: {keep_count} primary + {junk_count} haplotigs")
+        else:
+            print("[funcat] Warning: Could not validate purge parameters")
+
+            
+    except Exception as e:
+        print(f"⚠️  Purge duplicates failed: {e}")
+        print("📋 Continuing with polished assembly (diploid contigs preserved)")
+        print("💡 This may result in more contigs but assembly is still valid")
+        return assembly, None
 
     print("[funcat] Step 5 — splitting assembly")
     split_asm = purge_dir / "split.fa"
@@ -465,23 +549,199 @@ def run_purge_dups(assembly, reads, outdir, threads, minimap2_preset):
         f"{self_paf} > {bed_file}"
     )
 
-    run(f"get_seqs -e {bed_file} {assembly} -p {purge_dir}/purged")
+    # Analyze and potentially fix inverted classification
+    print("[funcat] Analyzing purge duplicates classification...")
+    
+    # Read the bed file and calculate primary vs haplotig sizes
+    junk_contigs = set()
+    junk_total_length = 0
+    
+    with open(bed_file, 'r') as f:
+        for line in f:
+            if line.strip():
+                parts = line.strip().split('\t')
+                if len(parts) >= 4 and parts[3] == 'JUNK':
+                    junk_contigs.add(parts[0])
+                    junk_total_length += int(parts[2]) - int(parts[1])
+    
+    # Calculate total assembly size and primary size
+    total_contigs = 0
+    total_length = 0
+    primary_total_length = 0
+    
+    with open(assembly, 'r') as f:
+        current_seq_len = 0
+        current_contig = None
+        for line in f:
+            if line.startswith('>'):
+                if current_seq_len > 0 and current_contig:
+                    total_length += current_seq_len
+                    total_contigs += 1
+                    if current_contig not in junk_contigs:
+                        primary_total_length += current_seq_len
+                current_contig = line.strip()[1:].split()[0]
+                current_seq_len = 0
+            else:
+                current_seq_len += len(line.strip())
+        # Last sequence
+        if current_seq_len > 0 and current_contig:
+            total_length += current_seq_len
+            total_contigs += 1
+            if current_contig not in junk_contigs:
+                primary_total_length += current_seq_len
+    
+    junk_count = len(junk_contigs)
+    primary_count = total_contigs - junk_count
+    
+    print(f"📊 Classification analysis:")
+    print(f"   Total: {total_contigs} contigs, {total_length/1e6:.1f} MB")
+    print(f"   JUNK: {junk_count} contigs, {junk_total_length/1e6:.1f} MB")
+    print(f"   Primary: {primary_count} contigs, {primary_total_length/1e6:.1f} MB")
+    
+    # Detect inverted classification (small primary, large JUNK)
+    invert_classification = False
+    if primary_total_length < junk_total_length and primary_total_length < total_length * 0.4:
+        print(f"⚠️  Classification appears INVERTED!")
+        print(f"   Primary ({primary_total_length/1e6:.1f} MB) < JUNK ({junk_total_length/1e6:.1f} MB)")
+        print(f"💡 For diploid assemblies, will swap primary ↔ haplotig classification")
+        invert_classification = True
+    else:
+        print(f"✅ Classification looks correct")
 
+    # Use Python implementation with smart inversion detection
+    print("[funcat] Extracting sequences with corrected classification...")
+    purged_primary = purge_dir / "purged.fa"
+    haplotigs = purge_dir / "hap.fa"
+    
+    # Python implementation to extract sequences with proper classification
+    classification_script = f'''
+import sys
+
+# Read the dups.bed file to get list of JUNK contigs
+junk_contigs = set()
+with open("{bed_file}", "r") as f:
+    for line in f:
+        if line.strip():
+            parts = line.strip().split("\\t")
+            if len(parts) >= 4 and parts[3] == "JUNK":
+                junk_contigs.add(parts[0])
+
+print(f"Found {{len(junk_contigs)}} JUNK contigs")
+
+# Apply inversion logic if needed
+invert = {str(invert_classification).lower()}
+if invert:
+    print("🔄 INVERTING classification: JUNK → Primary, Non-JUNK → Haplotigs")
+
+# Read assembly and extract sequences
+primary_sequences = []
+haplotig_sequences = []
+
+with open("{assembly}", "r") as infile:
+    current_seq = ""
+    current_header = ""
+    
+    for line in infile:
+        if line.startswith(">"):
+            # Process previous sequence
+            if current_header and current_seq:
+                contig_name = current_header[1:].split()[0]
+                is_marked_junk = contig_name in junk_contigs
+                
+                # Apply inversion logic
+                if invert:
+                    # Inverted: JUNK becomes primary, non-JUNK becomes haplotigs
+                    if is_marked_junk:
+                        primary_sequences.append((current_header, current_seq))
+                    else:
+                        haplotig_sequences.append((current_header, current_seq))
+                else:
+                    # Normal: non-JUNK is primary, JUNK is haplotigs
+                    if is_marked_junk:
+                        haplotig_sequences.append((current_header, current_seq))
+                    else:
+                        primary_sequences.append((current_header, current_seq))
+            
+            current_header = line.strip()
+            current_seq = ""
+        else:
+            current_seq += line
+    
+    # Process final sequence
+    if current_header and current_seq:
+        contig_name = current_header[1:].split()[0]
+        is_marked_junk = contig_name in junk_contigs
+        
+        if invert:
+            if is_marked_junk:
+                primary_sequences.append((current_header, current_seq))
+            else:
+                haplotig_sequences.append((current_header, current_seq))
+        else:
+            if is_marked_junk:
+                haplotig_sequences.append((current_header, current_seq))
+            else:
+                primary_sequences.append((current_header, current_seq))
+
+# Write primary assembly
+with open("{purged_primary}", "w") as f:
+    for header, seq in primary_sequences:
+        f.write(header + "\\n")
+        f.write(seq)
+
+# Write haplotigs
+with open("{haplotigs}", "w") as f:
+    for header, seq in haplotig_sequences:
+        f.write(header + "\\n")
+        f.write(seq)
+
+# Report final sizes
+primary_size = sum(len(seq) for _, seq in primary_sequences)
+haplotig_size = sum(len(seq) for _, seq in haplotig_sequences)
+
+print(f"✅ Final results:")
+print(f"   Primary: {{len(primary_sequences)}} contigs, {{primary_size/1e6:.1f}} MB")
+print(f"   Haplotigs: {{len(haplotig_sequences)}} contigs, {{haplotig_size/1e6:.1f}} MB")
+'''
+    
+    result = subprocess.run(["python3", "-c", classification_script], 
+                          capture_output=True, text=True, cwd=purge_dir)
+    
+    if result.returncode != 0:
+        print(f"❌ Python classification failed: {result.stderr}")
+        print("🔄 Falling back to original assembly")
+        return assembly, None
+    else:
+        print(result.stdout)
+    
+    # Validate output files exist and have content
     if not purged_primary.exists():
-        print("⚠️  purge_dups did not produce output — using unpurged assembly")
+        print("⚠️  purge_dups did not produce primary output — using unpurged assembly")
         return assembly, None
 
-    # Report
-    orig_contigs = sum(1 for r in SeqIO.parse(str(assembly), "fasta"))
-    purged_contigs = sum(1 for r in SeqIO.parse(str(purged_primary), "fasta"))
-    removed = orig_contigs - purged_contigs
+    # Check for reasonable file sizes
+    primary_size = purged_primary.stat().st_size if purged_primary.exists() else 0
+    haplotig_size = haplotigs.stat().st_size if haplotigs.exists() else 0
+    
+    if primary_size < 100000:  # Less than 100KB is suspiciously small
+        print(f"⚠️  Primary assembly very small ({primary_size} bytes)")
+        print("💡 This may indicate parameter issues - consider using original assembly")
 
-    print(f"\n✅ Purge Duplicates complete")
-    print(f"   Original contigs : {orig_contigs}")
-    print(f"   After purging    : {purged_contigs}  ({removed} haplotigs removed)")
-    if haplotigs.exists():
-        hap_contigs = sum(1 for r in SeqIO.parse(str(haplotigs), "fasta"))
-        print(f"   Haplotigs saved  : {hap_contigs} → {haplotigs}")
+    # Report final statistics
+    try:
+        from Bio import SeqIO
+        orig_contigs = sum(1 for r in SeqIO.parse(str(assembly), "fasta"))
+        purged_contigs = sum(1 for r in SeqIO.parse(str(purged_primary), "fasta"))
+        removed = orig_contigs - purged_contigs
+
+        print(f"\n✅ Purge Duplicates complete")
+        print(f"   Original contigs : {orig_contigs}")
+        print(f"   After purging    : {purged_contigs}  ({removed} haplotigs removed)")
+        if haplotigs.exists():
+            hap_contigs = sum(1 for r in SeqIO.parse(str(haplotigs), "fasta"))
+            print(f"   Haplotigs saved  : {hap_contigs} → {haplotigs}")
+    except ImportError:
+        print("✅ Purge Duplicates complete - install biopython for detailed stats")
 
     return purged_primary, haplotigs
 

@@ -39,6 +39,12 @@ READ_TYPE_CONFIGS = {
         "medaka_model": None,
         "label": "PacBio HiFi (CCS)",
     },
+    "pacbio-raw": {
+        "flye_flag": "--pacbio-raw",
+        "minimap2_preset": "map-pb",
+        "medaka_model": None,
+        "label": "PacBio Raw (subreads)",
+    },
 }
 
 # Default enhancement feature set

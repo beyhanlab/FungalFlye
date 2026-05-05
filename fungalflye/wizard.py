@@ -10,6 +10,15 @@ from .compare import run_snp_analysis
 from .dotplot_run import run_dotplot
 from .logger import log_user_selection
 
+# Optional PacBio detection import
+try:
+    from .pacbio_detection import select_pacbio_data_type_interactive
+    PACBIO_DETECTION_AVAILABLE = True
+except ImportError:
+    PACBIO_DETECTION_AVAILABLE = False
+    def select_pacbio_data_type_interactive(*args, **kwargs):
+        return "pacbio-hifi"  # default fallback
+
 app = typer.Typer()
 
 BANNER = r"""
@@ -103,7 +112,35 @@ def get_read_type() -> str:
     choice = typer.prompt("Enter choice", default="1")
     keys = list(READ_TYPE_CONFIGS.keys())
     try:
-        return keys[int(choice.strip()) - 1]
+        selected_type = keys[int(choice.strip()) - 1]
+        
+        # Enhanced PacBio selection with auto-detection
+        if selected_type == "pacbio-hifi":
+            typer.echo("\n🔬 PacBio Selected - Enhanced Data Type Detection Available")
+            typer.echo("Would you like to use automatic PacBio data type detection?")
+            typer.echo("This analyzes your data to determine if it's HiFi/CCS or raw subreads.")
+            auto_detect = typer.prompt("Enable auto-detection? [Y/n]", default="Y")
+            
+            if auto_detect.lower().startswith('y'):
+                # This will be handled later when we have the reads file path
+                # For now, keep the selection and the detection will happen in enhance.py
+                typer.echo("✅ Auto-detection enabled - will analyze data during assembly")
+                return selected_type
+            else:
+                typer.echo("\n📡 Manual PacBio Type Selection:")
+                typer.echo("  1) HiFi/CCS reads (high accuracy, newer)")
+                typer.echo("  2) Raw subreads (lower accuracy, older)")
+                pacbio_choice = typer.prompt("Select PacBio type [1/2]", default="1")
+                
+                if pacbio_choice.strip() == "2":
+                    typer.echo("Selected: PacBio Raw subreads")
+                    return "pacbio-raw"
+                else:
+                    typer.echo("Selected: PacBio HiFi/CCS")
+                    return "pacbio-hifi"
+        
+        return selected_type
+        
     except (ValueError, IndexError):
         typer.echo("Invalid — defaulting to nano-hq")
         return "nano-hq"
