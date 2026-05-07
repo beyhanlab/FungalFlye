@@ -106,9 +106,13 @@ def analyze_reads(reads, outdir):
     outdir = Path(outdir)
     outdir.mkdir(exist_ok=True)
     lengths_file = outdir / "read_lengths.tsv"
-    run(f"seqkit fx2tab -n -l {reads} > {lengths_file}")
-    df = pd.read_csv(lengths_file, sep="\t", header=None)
-    lengths = df[1]
+    # awk $NF always grabs the last field (the length), regardless of how many
+    # SAM auxiliary tags modern Dorado basecaller embeds in read names.
+    # This makes the function robust to any basecaller version or read type
+    # (Nanopore, PacBio HiFi, split reads, etc).
+    run(f"seqkit fx2tab -n -l {reads} | awk '{{print $NF}}' > {lengths_file}")
+    df = pd.read_csv(lengths_file, header=None, names=["length"])
+    lengths = pd.to_numeric(df["length"], errors="coerce").dropna().astype(int)
     total_reads = len(lengths)
     total_bases = lengths.sum()
     sorted_lengths = sorted(lengths, reverse=True)

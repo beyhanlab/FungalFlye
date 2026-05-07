@@ -231,9 +231,10 @@ def run_qc(fasta, telomere=None, run_telomeres=False,
     outdir = fasta.parent / "funcat_qc"
     outdir.mkdir(parents=True, exist_ok=True)
     run(f"seqkit stats {fasta} > {outdir / 'stats.txt'}")
-    run(f"seqkit fx2tab -n -l {fasta} > {outdir / 'lengths.tsv'}")
-    df = pd.read_csv(outdir / "lengths.tsv", sep="\t", header=None)
-    lengths = df[1].tolist()
+    # Use BioPython directly to get contig lengths — avoids any issues with
+    # seqkit column parsing (FASTA headers have no SAM tags so seqkit is fine
+    # here, but BioPython is simpler and equally robust).
+    lengths = [len(r.seq) for r in SeqIO.parse(str(fasta), "fasta")]
     plt.figure(figsize=(6, 4))
     plt.hist(lengths, bins=30)
     plt.xlabel("Contig length (bp)")
