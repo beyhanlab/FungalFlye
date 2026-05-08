@@ -23,10 +23,11 @@ dependencies:
   - racon              # PacBio polishing fallback
   - bwa                # read mapping for Illumina polishing
   - polypolish         # Illumina polisher (also installs polypolish_insert_filter)
+  - pilon              # alternative Illumina polisher (polypolish preferred)
 
   # ── Optional assembly modules ─────────────────────────────────────────
   - purge_dups         # diploid haplotig removal (split_fa, pbcstat, calcuts, get_seqs)
-  - mummer4            # nucmer for SNP analysis and dotplots
+  - mummer4            # nucmer for SNP analysis and dotplots (includes show-snps, show-coords)
 
   # ── Python packages ───────────────────────────────────────────────────
   - pandas>=1.5
