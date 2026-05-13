@@ -6,41 +6,40 @@ channels:
 dependencies:
   - python=3.10
 
-  # ── Core assembly tools ────────────────────────────────────────────────
-  - flye
-  - minimap2
-  - seqkit
-  - filtlong
+  # ── Core assembly tools (REQUIRED) ─────────────────────────────────────
+  - flye                           # De novo long-read assembly
+  - minimap2                       # Universal read/contig mapping
+  - seqkit                         # Read and assembly statistics
+  - filtlong                       # Coverage-based read downsampling
 
-  # ── Alignment / BAM handling ───────────────────────────────────────────
-  # samtools must be >=1.17 — older versions (e.g. 0.1.19) lack commands
-  # required by Medaka and confidence scoring (samtools depth -a, sort -@)
-  - samtools>=1.17
-  - bcftools           # required by Medaka for variant calling
-  - htslib             # provides bgzip and tabix (required by Medaka)
+  # ── Alignment & BAM handling (REQUIRED) ───────────────────────────────
+  # samtools MUST be >=1.17 for Medaka compatibility
+  - samtools>=1.17                 # BAM handling, depth analysis, sorting
+  - bcftools                       # VCF variant calling (Medaka dependency)
+  - htslib                         # bgzip & tabix for VCF compression (Medaka dependency)
+  - bwa                            # Illumina read alignment for hybrid polishing
 
-  # ── Polishing ─────────────────────────────────────────────────────────
-  - racon              # PacBio polishing fallback
-  - bwa                # read mapping for Illumina polishing
-  - polypolish         # Illumina polisher (also installs polypolish_insert_filter)
-  - pilon              # alternative Illumina polisher (polypolish preferred)
+  # ── Polishing & enhancement (ALL INCLUDED) ────────────────────────────
+  - racon                          # PacBio HiFi polishing
+  - polypolish                     # Illumina polishing (default, includes polypolish_insert_filter)
+  - pilon                          # Alternative Illumina polisher
 
-  # ── Optional assembly modules ─────────────────────────────────────────
-  - purge_dups         # diploid haplotig removal (split_fa, pbcstat, calcuts, get_seqs)
-  - mummer4            # nucmer for SNP analysis and dotplots (includes show-snps, show-coords)
+  # ── Assembly optimization & analysis ──────────────────────────────────
+  - purge_dups                     # Diploid haplotig removal & repeat detection
+  - mummer4                        # Whole-genome comparison, SNP detection, dotplots
 
-  # ── Python packages ───────────────────────────────────────────────────
-  - pandas>=1.5
-  - matplotlib>=3.6
-  - biopython>=1.81
-  - decorator>=4.0
-  - typer>=0.9
-  - pip
+  # ── Python packages (ALL REQUIRED) ────────────────────────────────────
+  - pandas>=1.5                    # Data handling, TSV/CSV processing
+  - matplotlib>=3.6                # QC plots and visualizations
+  - biopython>=1.81                # FASTA/FASTQ parsing (SeqIO)
+  - decorator>=4.0                 # Python utilities
+  - typer>=0.9                     # CLI framework
+  - pip                            # Package manager for pip-only packages
 
   - pip:
-    # Medaka must be pip-installed (no stable conda package)
-    # Requires bcftools, bgzip, tabix to already be on PATH (installed above)
-    - medaka
-    - pyabpoa            # optional Medaka dependency, avoids runtime warning
-    # Install FunCAT itself
+    # Medaka must be pip-installed (no conda package available)
+    # Requires bcftools, bgzip, tabix to be on PATH (installed above)
+    - medaka                       # ONT long-read consensus polishing
+    - pyabpoa                      # Medaka optimization (reduces warnings, speeds up polishing)
+    # Install FunCAT itself from GitHub
     - git+https://github.com/beyhanlab/FunCAT.git
